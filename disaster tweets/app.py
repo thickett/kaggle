@@ -125,11 +125,5 @@ def server(input, output, session):
     # Register the column_select function as a reactive effect
     reactive.Effect(column_select)
   
-
-
-
 app = App(app_ui, server)
 
-
-def numeric_col_desc(col):
-    return col[0]
