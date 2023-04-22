@@ -130,3 +130,6 @@ def server(input, output, session):
 
 app = App(app_ui, server)
 
+
+def numeric_col_desc(col):
+    return col[0]
