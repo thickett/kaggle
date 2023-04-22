@@ -30,7 +30,9 @@ app_ui = ui.page_fluid(
                 ),
                 ui.panel_main(
     #ui output element which we will call in the server to fill with our dataframe.
-                        ui.output_ui("contents")
+                        ui.output_ui("contents"),
+                        ui.output_text_verbatim("numeric_var_text"),
+                        ui.output_ui("description")
                 )
     
     
@@ -46,8 +48,8 @@ app_ui = ui.page_fluid(
                     ui.input_select("column_select","select a column to describe.",[])
                 ),
                     
-                ui.panel_main("hllooo",
-                    ui.output_ui("description")
+                ui.panel_main(
+                    
                 )
            )
            
@@ -94,10 +96,21 @@ def server(input, output, session):
     @render.ui   
     def description():
         df = global_data.get("df")
-        if df is not None:
-            desc = df.describe()
-            return ui.HTML(desc.to_html(classes=settings["table_layout"]))
-    # function uses to dynmaically fill the dtype_select select button. 
+        
+        if input.input_data() is None:
+            return 
+        desc = df.describe()
+        return ui.HTML(desc.to_html(classes=settings["table_layout"]))
+    
+    @output
+    @render.text
+    def numeric_var_text():
+        if input.input_data() is None:
+            return 
+        return ui.HTML('General description of numeric fields.')
+    
+
+    # function uses to dynmaically fill the column_select select button. 
     # notice how we call this function within the contents function and how we dont set any
     #handles on this. We do define it as an Effect function below though!
     def column_select():
@@ -106,10 +119,10 @@ def server(input, output, session):
         if df is not None:
             ui.update_select(
             "column_select", 
-            choices = [str(dtype) for dtype in set(df.columns)]
+            choices = [str(col) for col in set(df.columns)]
 
         )
-    # Register the dtype_select function as a reactive effect
+    # Register the column_select function as a reactive effect
     reactive.Effect(column_select)
   
 
