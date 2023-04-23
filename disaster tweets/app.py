@@ -3,6 +3,8 @@ import numpy as np
 from shiny import ui, render, App, reactive
 from shiny.types import FileInfo
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
+from app_calculations import numeric_histogram, categorical_count_plot
 
 settings = {
 
@@ -45,10 +47,11 @@ app_ui = ui.page_fluid(
     
                 ui.panel_sidebar(
     # create a select object but with [] values. i.e we will dynamically update these depending on the cols.
-                    ui.input_select("column_select","select a column to describe.",[])
+                    ui.input_select("column_select","select a column to describe.",[]),
+                    ui.input_slider("graph_slide","Change the amount of data to be shown",0,100,1)
                 ),
                     
-                ui.panel_main(
+                ui.panel_main(ui.output_plot("histo")
                     
                 )
            )
@@ -108,6 +111,25 @@ def server(input, output, session):
         if input.input_data() is None:
             return 
         return ui.HTML('General description of numeric fields.')
+    
+    @output
+    @render.plot
+    def histo():
+        df = global_data.get("df")
+        if df is not None:
+            
+            col_name = input.column_select.get()
+            col_data = df[col_name]
+
+            unique_counts = col_data.value_counts()
+            slide_input = input.graph_slide.get()
+            
+            if is_numeric_dtype(col_data):
+                n = slide_input*2
+                return numeric_histogram(col_data,col_name,n)
+            else: 
+                n = round(len(unique_counts) * slide_input/100)
+                return categorical_count_plot(unique_counts,col_name,n)
     
 
     # function uses to dynmaically fill the column_select select button. 
