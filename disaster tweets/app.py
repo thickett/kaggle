@@ -59,7 +59,24 @@ app_ui = ui.page_fluid(
            
            
            ),
-    ui.nav("EDA")
+    ui.nav("Pre Processing",
+            ui.panel_title("Pre Processing"),
+            ui.layout_sidebar(
+                ui.panel_sidebar(
+                    ui.input_selectize("pre_field_select_numeric","Numeric Fields",[],multiple=True),
+                    ui.input_selectize("pre_field_select_categorical","Categorical Fields",[],multiple=True),
+                    ui.input_selectize("pre_field_select_text","Text Fields",[],multiple=True),
+
+
+
+                    
+                ),
+                ui.panel_main()
+            )
+            
+            
+            
+            )
     )
 
 )
@@ -126,10 +143,10 @@ def server(input, output, session):
             
             if is_numeric_dtype(col_data):
                 n = slide_input*2
-                return numeric_histogram(col_data,col_name,n)
+                return numeric_histogram(col_data,col_name,n+1)
             else: 
                 n = round(len(unique_counts) * slide_input/100)
-                return categorical_count_plot(unique_counts,col_name,n)
+                return categorical_count_plot(unique_counts,col_name,n+1)
     
 
     # function uses to dynmaically fill the column_select select button. 
@@ -139,13 +156,32 @@ def server(input, output, session):
         # Access the dataframe from the global dictionary
         df = global_data.get('df')
         if df is not None:
-            ui.update_select(
-            "column_select", 
             choices = [str(col) for col in set(df.columns)]
+            
+            #update select boxes on Data page with col names
+            update_select_list = ["column_select" # define select boxes to update
+                                  ]
+            for selection in update_select_list:
+                ui.update_select(
+                selection, 
+                choices = choices),
 
-        )
+            # update selectize boxes in pre page with col names
+            update_selectize_list = ["pre_field_select_numeric", # define selectize boxes to update
+                                     "pre_field_select_categorical",
+                                     "pre_field_select_text"]
+            for selectize in update_selectize_list:
+                ui.update_selectize(
+                selectize,
+                choices=choices),
+            
     # Register the column_select function as a reactive effect
     reactive.Effect(column_select)
+
+
+    ## EDA Page server
+
+
   
 app = App(app_ui, server)
 
