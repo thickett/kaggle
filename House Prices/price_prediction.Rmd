@@ -1,0 +1,908 @@
+---
+title: "Untitled"
+author: "Callum Thickett"
+date: "25/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(corrplot)
+library(caret)
+library(gridExtra)
+library(scales)
+library(Rmisc)
+library(ggrepel)
+library(randomForest)
+library(psych)
+
+```
+
+```{r}
+training <- read.csv("train.csv")
+test <- read.csv("test.csv")
+```
+
+## we will want to combine the 2 data sets for cleaning purposes, first lets look at them individually to see if everything is equal.
+```{r}
+head(training)
+head(test)
+```
+
+```{r}
+glimpse(training)
+glimpse(test)
+```
+
+initially, we want to keep all columns except id, we will remove this, keeping the test ids for the submission file
+```{r}
+test_labels <- test$id
+training$Id <-NULL
+test$Id <- NULL
+```
+
+both have the same number of columns (excluding the response column) and roughly 1460 rows. 
+several rows have null values, we will have to clean these 
+individually, first we will combine the data sets to make the cleaning process easier. 
+
+```{r}
+test$SalePrice <- NA #need same columns to bind
+all <- rbind(training,test)
+all_fallback <- rbind(training,test)
+dim(all)
+```
+
+## lets see what columns have null values through a viz.
+
+```{r}
+nulcols <-all %>% 
+  select(-SalePrice) %>% 
+  sapply(.,function(x) sum(is.na(x))) %>% 
+  data.frame() %>% 
+    rownames_to_column(var="Categories") 
+  colnames(nulcols) <- c( "Categories","Count")
+  
+```
+
+
+```{r}
+nulcols %>% 
+  filter(Count > 0) %>% 
+  ggplot(aes(x=reorder(Categories,Count),y=Count)) + 
+  geom_col() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(x="Categories", title="categories that have atleast one null value")
+paste("there are",nrow(nulcols %>%filter(Count >0)),"features with atleast one null value.")
+```
+
+## look at correlation between features to see if we run into multicolinearity issues and to see what most effects saleprices before anykind of feature engineering/cleaning
+```{r}
+Numeric_Vars<- which(sapply(all,is.numeric))
+Numeric_vars_names <- names(Numeric_Vars)
+all_numeric_vars <- all[,Numeric_Vars]
+cor_numeric <- cor(all_numeric_vars, use="pairwise.complete.obs")
+
+#want to create matrix and sort by correlation with saleprice
+
+cor_sorted <- as.matrix(sort(cor_numeric[,"SalePrice"],decreasing =TRUE))
+
+## lets just get the values that have a correlation greater than 0.5
+
+cor_high <- names(which(apply(cor_sorted,1,function(x) abs(x) >0.5)))
+
+cor_numeric <- cor_numeric[cor_high,cor_high]
+
+corrplot.mixed(cor_numeric,tl.col="black",tl.pos = "lt",number.cex=0.53)
+
+
+```
+
+### overallqual and grlivarea are most correlated with saleprice
+
+###can see some areas where multicolinearity will be an issue. mainly with garagecars and garage area which have strong linear correlation with eachother and a similar correlation to SalePrice
+
+
+### lets look at the most impactful features.
+
+```{r overallqual viz 1}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(OverallQual),SalePrice))+
+  stat_summary(geom ='bar', fun = 'median', fill="blue") +
+  geom_label(stat = "count", aes(label=..count.., y=..count..))
+  
+```
+
+```{r overallqual viz 2}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(OverallQual),SalePrice)) +
+  geom_boxplot()
+```
+
+## look at grlivarea
+
+```{r}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GrLivArea,SalePrice)) +
+  geom_point(col="blue", alpha=0.3) +
+  geom_smooth(method = "lm",se=FALSE, formula = y~x, col="black") +
+  geom_text_repel(aes(label=ifelse(GrLivArea[!is.na(SalePrice)] >4500,rownames(all),"")))
+```
+
+524 and 1299 possible outliers to remove, lets see if the low price is explained by there OverallQual.
+
+```{r}
+all[c(524,1299),] %>% 
+  select(OverallQual)
+```
+both have an OverallQual. so yea they may be outliers.
+
+
+## transforming the data.
+###first the numeric columns. we will deal with any null values and transform the data where needed. i.e factor.
+
+```{r}
+Numeric_vars_all <- all[,Numeric_vars_names]
+paste("there are",ncol(Numeric_vars_all),"numeric columns" )
+```
+there are 37 numeric columns. we will have to deal with each individually. 
+
+### MSSubClass
+
+```{r MSSubClass}
+Numeric_vars_all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(fct_infreq(factor(MSSubClass)),SalePrice)) +
+  stat_summary(geom="bar", fun="median", fill="blue") +
+  geom_label(stat="count", aes(label=..count..,y=..count..)) 
+```
+
+```{r}
+sum(is.na(all$MSSubClass))
+```
+## no null values.
+
+## doesnt seem to be any ordinal properties to MSSubClass so ill just make it a factor.
+```{r}
+all$MSSubClass <- as.factor(all$MSSubClass)
+```
+
+## LotFrontage
+
+
+
+```{r}
+sum(is.na(all$LotFrontage))
+```
+## 486 properties with Na lotfrontage, need to give this a value. can find a variable that we could match them to, i.e the median lotfrotange for the neigbourhood theyre in.
+
+```{r}
+all %>% 
+  filter(!is.na(LotFrontage)) %>% 
+  ggplot(aes(Neighborhood,LotFrontage)) +
+  stat_summary(geom="bar", fun="median", fill="blue") +
+  theme(axis.text.x = element_text(angle = 90)
+```
+
+
+```{r LotFrontage}
+for (i in 1:nrow(all)) {
+  if(is.na(all$LotFrontage[i])) {
+    all$LotFrontage[i] <- as.integer(median(all$LotFrontage[all$Neighborhood ==all$Neighborhood[i]],na.rm = TRUE))
+  }
+}
+
+```
+
+
+```{r}
+all[!is.na(all$SalePrice),] %>% 
+  ggplot(aes(LotFrontage,SalePrice)) +
+  geom_point(col="blue",alpha=0.3) +
+  geom_smooth(method = "lm", se=FALSE, formula = y~ x,col="black")
+```
+
+### take a look at lot area.
+
+```{r LotArea}
+sum(all$LotArea[is.na(all$LotArea)])
+```
+no na values
+
+### lets see how it affects SalePrice
+
+```{r}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(LotArea,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm", formula = y ~x, se=FALSE) +
+  geom_text_repel(aes(label =   ifelse(LotArea>100000,rownames(all),"")))
+```
+4 data point have a huge LotArea but the saleprice is rather small. no reason to assume these data points are wrong, but we dont want them for modelling purposes. 
+
+lets remove the outliers.
+
+```{r}
+all <-all[-c(707,250,336,314),]
+  
+```
+
+lets see how it affects our lm
+```{r}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(LotArea,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm", formula = y ~x, se=FALSE) +
+  geom_text_repel(aes(label =   ifelse(LotArea>100000,rownames(all),"")))
+```
+
+it looks so much better!
+
+## OverallQual
+```{r OverallQual}
+sum(all$OverallQual[is.na(all$OverallQual)])
+```
+we already look at overallqual. i think its fine as is. (ordinal)
+
+```{r overallCond}
+sum(all$OverallCond[is.na(all$OverallCond)])
+```
+
+```{r}
+#Numeric_vars_names
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(OverallCond),SalePrice)) +
+  stat_summary(geom="bar",fun="median") 
+
+```
+## i think its ok? again idk if it need to be a factor :(
+
+##YearBuilt
+```{r YearBuilt}
+sum(all$YearBuilt[is.na(all$YearBuilt)])
+```
+
+```{r}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(YearBuilt,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm", formula = y ~x, se=FALSE) 
+```
+
+## YearRemodAdd
+```{r YearRemodAdd}
+#Numeric_vars_names
+sum(all$YearRemodAdd[is.na(all$YearRemodAdd)])
+```
+interesting part about this one is that if YearRemodAdd ==YearBuilt then it was never remodeled. 
+
+## MasVnrArea
+```{r MasVnrArea}
+#Numeric_vars_names
+sum(all$MasVnrArea[is.na(all$MasVnrArea)])
+all$MasVnrArea[is.na(all$MasVnrArea)] <-0
+```
+some values were NA, changed them to 0. 
+
+### BsmtFinSF1
+```{r BsmtFinSF1}
+#Numeric_vars_names
+which(is.na(all$BsmtFinSF1))
+all$BsmtFinSF1[2117]
+all$BsmtFinSF1[is.na(all$BsmtFinSF1)] <- 0
+```
+
+```{r}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(BsmtFinSF1,SalePrice)) +
+  geom_point()
+  
+```
+
+```{r BsmtFinSF2}
+#Numeric_vars_names
+all$BsmtFinSF2[is.na(all$BsmtFinSF2)] <- 0
+```
+
+## BsmtUnfSF 
+```{r BsmtUnfSF}
+all$BsmtUnfSF[is.na(all$BsmtUnfSF)] <- 0
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(BsmtUnfSF,SalePrice)) +
+  geom_point()
+
+```
+## TotalBsmtSF
+```{r TotalBsmtSF}
+
+all$TotalBsmtSF[is.na(all$TotalBsmtSF)] <- 0
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(TotalBsmtSF,SalePrice)) +
+  geom_point()
+```
+## X1stFlrSF
+
+```{r X1stFlrSF}
+#Numeric_vars_names
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(X1stFlrSF,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm",se=FALSE, formula =y~x) +
+  geom_text_repel(aes(label=ifelse(X1stFlrSF>4000,rownames(all),"")))
+```
+## may need to deal with row 1299, seem to be an outlier.
+
+## X2ndFlrSF
+```{r X2ndFlrSF}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(X2ndFlrSF,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm",se=FALSE, formula =y~x) +
+  geom_text_repel(aes(label=ifelse(X2ndFlrSF>4000,rownames(all),"")))
+
+```
+
+# all the 0 values are throughing off the correlation, maybe we can encode this variable?
+
+## LowQualFinSF
+```{r LowQualFinSF}
+#Numeric_vars_names
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(LowQualFinSF,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm",se=FALSE, formula =y~x)
+```
+
+LowQUALFinSF seems to be a pretty useless variable
+## GrLivArea
+```{r GrLivArea}
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GrLivArea,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm",se=FALSE, formula =y~x)
+
+sum(is.na(all$GrLivArea))
+```
+GrLivArea seems like a good predictor. some values are a bit out there, but probs not an issue (seems like the outliers may cancel out)
+
+## BsmtFullBath
+```{r BsmtFullBath}
+sum(is.na(all$BsmtFullBath))
+##assuming the na values should just be 0 
+
+all$BsmtFullBath[is.na(all$BsmtFullBath)] <- 0
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(BsmtFullBath),SalePrice)) +
+  stat_summary(geom="bar", fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+```
+BsmtFullBath needs to be factored, doesnt seem to be ordinal in nature.
+```{r}
+#Numeric_vars_names
+
+```
+
+##BsmtHalfBath:  
+
+```{r BsmtHalfBath: }
+sum(is.na(all$BsmtHalfBath))
+all$BsmtHalfBath[is.na(all$BsmtHalfBath)] <- 0 
+
+
+```
+## FullBath
+
+```{r FullBath}
+sum(is.na(all$FullBath))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(FullBath),SalePrice)) +
+  stat_summary(geom="bar", fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+
+```
+
+## HalfBath
+```{r HalfBath}
+sum(is.na(all$HalfBath))
+
+
+```
+## BedroomAbvGr
+
+```{r BedroomAbvGr (Bedroom)}
+sum(is.na(all$BedroomAbvGr))
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(BedroomAbvGr),SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+all$BedroomAbvGr <- as.integer(all$BedroomAbvGr)
+
+```
+## Kitchen
+
+```{r Kitchen}
+
+sum(is.na(all$KitchenAbvGr))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(KitchenAbvGr),SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+all$KitchenAbvGr <- as.factor(all$KitchenAbvGr)
+
+```
+
+## KitchenQual
+
+```{r KitchenQual}
+
+
+>
+sum(is.na(all$KitchenQual))
+
+which(is.na(all$KitchenQual))
+
+all[1552,c("KitchenQual","KitchenAbvGr")]
+
+#just set 1552 to be average, i.e TA
+all$KitchenQual[1552] <- "TA"
+
+#create quality variable
+
+quality <- c("None"=0,"Po" =1,"Fa"=2,"TA" =3, "Gd" =4, "Ex" =5 ) 
+all$KitchenQual <-as.integer(revalue(all$KitchenQual,quality))
+
+
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(KitchenQual),SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+```
+KitchenQual clearly ordinal data, transformed it accordingly.
+
+##
+```{r TotRmsAbvGrd}
+sum(is.na(all$TotRmsAbvGrd))
+
+all$TotRmsAbvGrd <- as.integer(all$TotRmsAbvGrd)
+
+
+```
+
+## Functional
+```{r Functional}
+sum(is.na(all$Functional))
+which(is.na(all$Functional))
+all$Functional[c(2470,2213)] <-"Typ"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(Functional),SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+all$Functional <- as.integer(revalue(all$Functional, c("Sal" =0, "Sev" =1, "Maj2" =2,"Maj1"= 3,"Mod"=4,"Min2"=5,"Min1"=6,"Typ"=7)))     
+```
+## Fireplaces
+
+```{r Fireplaces}
+
+sum(is.na(all$Fireplaces))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(Fireplaces),SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+```
+
+## FireplaceQu
+
+```{r FireplaceQu}
+
+sum(is.na(all$FireplaceQu))
+
+all$FireplaceQu[is.na(all$FireplaceQu)] <-"None"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(FireplaceQu),SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+all$FireplaceQu <- as.integer(revalue(all$FireplaceQu, quality))
+
+```
+## GarageType
+```{r GarageType}
+sum(is.na(all$GarageType))
+
+all$GarageType[is.na(all$GarageType)] <-"None"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GarageType,SalePrice)) +
+  stat_summary(geom="bar",fun="median", fill="blue") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+## garge type doesnt seem to be ordinal so we shall amke it a factor.
+
+all$GarageType <- as.factor(all$GarageType)
+
+```
+
+## GarageYrBlt
+
+```{r GarageYrBlt}
+sum(is.na(all$GarageYrBlt))
+
+all$GarageYrBlt[is.na(all$GarageYrBlt)] <- all$YearBuilt[is.na(all$GarageYrBlt)]
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GarageYrBlt,SalePrice)) +
+  geom_point(col="blue") +
+  geom_smooth(method="lm", se=FALSE)
+
+
+```
+since some houses dont have a garage, we cant just remove these rows, or set it to 0. we will just make it equal to the yearbuilt 
+
+## GarageFinish
+
+```{r GarageFinish}
+sum(is.na(all$GarageFinish))
+
+## NA values = no garage.
+all$GarageFinish[is.na(all$GarageFinish)] <- "None"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GarageFinish,SalePrice)) +
+  stat_summary(geom="bar",fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+## clearly ordinal data.
+
+all$GarageFinish <- as.integer(revalue(all$GarageFinish, c("None" = 0,"Unf" =1, "RFn" = 2, "Fin" = 3)))
+
+```
+## GarageCars
+
+```{r GarageCars}
+sum(is.na(all$GarageCars))
+which(is.na(all$GarageCars))
+
+all[2573,c("GarageFinish","GarageType") ]
+##seems to be input error, this house doesnt have a garage. ill just set it to 0
+
+all$GarageCars[2573] <- 0
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GarageCars,SalePrice)) +
+  stat_summary(geom="bar",fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+```
+
+
+## GarageArea
+
+```{r GarageArea}
+sum(is.na(all$GarageArea))
+which(is.na(all$GarageArea))
+##same house as last time.
+
+all$GarageArea[2573] <- 0
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(GarageArea,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm")
+
+```
+
+```{r}
+sum(is.na(all$GarageQual))
+##159 Nas corraspond to 0 garages
+all$GarageQual[is.na(all$GarageQual)] <-"None"
+
+all$GarageQual <- as.integer(revalue(all$GarageQual,quality))
+```
+
+## GarageCond
+```{r GarageCond}
+all$GarageCond[is.na(all$GarageCond)] <-"None"
+
+all$GarageCond <- as.integer(revalue(all$GarageCond,quality))
+```
+
+## PavedDrive
+
+```{r PavedDrive}
+sum(is.na(all$PavedDrive))
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(PavedDrive,SalePrice)) +
+  stat_summary(geom="bar",fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+##clearly ordianl data
+all$PavedDrive <- as.integer(revalue(all$PavedDrive, c("N"=0,"P"=1,"Y"=2)))
+```
+
+
+
+## WoodDeckSF
+
+```{r WoodDeckSF}
+sum(is.na(all$WoodDeckSF))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(WoodDeckSF,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm")
+```
+
+## OpenPorchSF: 
+```{r OpenPorchSF}
+sum(is.na(all$OpenPorchSF))
+```
+
+## EnclosedPorch
+
+```{r EnclosedPorch}
+sum(is.na(all$EnclosedPorch))
+```
+
+## 3SsnPorch
+
+```{r 3SsnPorch}
+sum(is.na(all$'3SsnPorch'))
+```
+
+## ScreenPorch
+
+```{r ScreenPorch}
+sum(is.na(all$ScreenPorch))
+```
+all porch data looks fine, should probably put these all into one column
+
+
+# pool data
+
+## PoolArea
+```{r PoolArea}
+sum(is.na(all$PoolArea))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(PoolArea,SalePrice)) +
+  geom_point() +
+  geom_smooth(method="lm")
+
+```
+
+pool area probs not worth using, majority of houses have no pool and it doesnt seem to affect the price too much.
+## PoolQC
+```{r PoolQC}
+sum(is.na(all$PoolQC))
+
+all$PoolQC[is.na(all$PoolQC)] <- "None"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(PoolQC,SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+all$PoolQC <- as.integer(revalue(all$PoolQC,quality))
+```
+
+## Fence
+```{r Fence}
+sum(is.na(all$Fence))
+
+##na values mean no fence.
+all$Fence[is.na(all$Fence)] <-"None"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(Fence,SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+## fence seems to have little effect, no clear ordinality so we will just make it a factor
+all$Fence <- as.factor(all$Fence)
+
+```
+
+At first glance it looked like this would be ordinal, but doesnt seem to be the case.
+
+## MiscFeature
+
+```{r MiscFeature}
+sum(is.na(all$MiscFeature))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(MiscFeature,SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+ #bit pointless, doesnt diviate much and bascilly none of the houses have a tennis court.
+```
+can probs ignore the MiscFeature data.
+
+## MiscVal
+
+```{r MiscVal}
+sum(is.na(all$MiscVal))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(MiscVal,SalePrice)) +
+  geom_point()
+
+```
+again, looks like this is a pretty useless feature.
+
+## MoSold
+
+```{r MoSold }
+sum(is.na(all$MoSold))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(MoSold),SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..c))
+
+## convert to factor
+all$MoSold <- as.factor(all$MoSold)
+
+```
+
+## YrSold
+
+```{r YrSold}
+sum(is.na(all$YrSold))
+summary(all$YrSold)
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(factor(YrSold),SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+## convert to factor
+all$YrSold <- as.factor(all$YrSold)
+
+
+```
+
+## SaleType
+
+```{r SaleType}
+sum(is.na(all$SaleType))
+which(is.na(all$SaleType))
+
+all$SaleType[is.na(all$SaleType)] <-"WD"
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes((SaleType),SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+
+all$SaleType <- as.factor(all$SaleType)
+
+```
+
+## SaleCondition
+
+```{r SaleCondition}
+
+sum(is.na(all$SaleCondition))
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes((SaleCondition),SalePrice)) +
+  stat_summary(geom="bar", fun="median") +
+  geom_label(stat="count",aes(label=..count..,y=..count..))
+all$SaleCondition <- as.factor(all$SaleCondition)
+```
+
+## create another correlation matrix with cleaned variables.
+
+```{r correlation matrix after cleaning}
+numeric_vars_clean <- which(sapply(all,is.numeric))
+numeric_vars_clean_names <- names(numeric_vars_clean)
+numeric_vars_clean_all <- all[,numeric_vars_clean_names]
+
+clean_cor <- cor(numeric_vars_clean_all, use = "pairwise.complete.obs")
+
+clean_sorted <- as.matrix(sort(clean_cor[,"SalePrice"],decreasing=TRUE))
+
+clean_highest <- names(which(apply(clean_sorted,1,function(x) abs(x) >0.5)))
+## update clean_cor to have only values that have a correlation of >=0.5 with saleprice.
+clean_cor <- clean_cor[clean_highest,clean_highest]
+corrplot.mixed(clean_cor, tl.pos = "lt", tl.col="black", t1.cex=0.5, c1.cex=0.5, number.cex=0.45)
+
+```
+## feature engineering 
+
+
+1) sum all bath terms
+```{r bath terms}
+all <-all %>% 
+  mutate(all_baths =((BsmtFullBath) +(BsmtHalfBath*0.5) +(HalfBath*0.5)  +(FullBath)) )
+
+cor(all$all_baths,all$SalePrice)
+  
+```
+
+2) houses that have been remodeled 
+
+```{r house remodel and age}
+## could have just done this in an ifelse statement. 
+for (i in 1:nrow(all)) {
+  if (all$YearBuilt[i]==all$YearRemodAdd[i]) {
+    all[i,"House_Remodeled"] <- 1
+  } else {
+  all[i,"House_Remodeled"] <- 0
+}
+}
+## house age 
+all$age <- as.numeric(levels(all$YrSold))[all$YrSold] - all$YearRemodAdd
+
+
+all %>% 
+  filter(!is.na(SalePrice)) %>% 
+  ggplot(aes(age,SalePrice)) +
+  geom_point()
+
+cor(all$SalePrice,all$age, use="pairwise.complete.obs")
+```
+
+3) consolidating porch sizes
+
+```{r porch size feature}
+all$Total_Porch <- all$OpenPorchSF + all$EnclosedPorch + all$X3SsnPorch + all$ScreenPorch
+
+cor(all$SalePrice,all$Total_Porch,use= "pairwise.complete.obs")
+```
+
+## bin neigbourhoods and remove correlated variables to avoid multicolinearity.
+
+

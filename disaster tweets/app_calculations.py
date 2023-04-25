@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+
 # set theme for all graphs to be that of seaborn.
 sns.set_theme()
 
@@ -40,6 +41,7 @@ class pre_process():
             return col
     
     def text_pre_process(self):
+
         pass
 
     def categorical_pre_process(self):

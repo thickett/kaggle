@@ -167,14 +167,27 @@ def server(input, output, session):
                 choices = choices),
 
             # update selectize boxes in pre page with col names
-            update_selectize_list = ["pre_field_select_numeric", # define selectize boxes to update
+            update_selectize_list_text = [ # define selectize boxes to update
                                      "pre_field_select_categorical",
                                      "pre_field_select_text"]
-            for selectize in update_selectize_list:
+            
+            update_selectize_list_numeric= ["pre_field_select_numeric",]
+            
+            choice_numeric = [col for col in choices if is_numeric_dtype(df[col])]
+
+            choice_text = [col for col in choices if col not in choice_numeric]
+            # update choices that require text data.
+            for selectize in update_selectize_list_text:
                 ui.update_selectize(
                 selectize,
-                choices=choices),
-            
+                choices=choice_text)
+            # update choices that require numeric data.
+            for selectize in update_selectize_list_numeric:
+                ui.update_selectize(
+                selectize,
+                choices=choice_numeric)
+
+                
     # Register the column_select function as a reactive effect
     reactive.Effect(column_select)
 
