@@ -38,7 +38,7 @@ def categorical_count_plot(col,title,n):
 
 class pre_process():
 
-    def __init__(self,df,numeric_cols,text_cols,categorical_cols):
+    def __init__(self,df,numeric_cols=None,text_cols=None,categorical_cols=None):
         self.df = df.copy()
         self.numeric_cols = numeric_cols
         self.text_cols = text_cols
@@ -97,3 +97,8 @@ class pre_process():
         # then return this dataframe. That way we only copy the dataframe once, and then make one set
         # of changes, and return the new dataframe.
         text_columns = self.text_pre_process()
+        
+        for i,text_i in enumerate(text_columns):
+            self.df[self.text_cols[i]] = text_i
+    
+        return self.df

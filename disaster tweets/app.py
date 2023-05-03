@@ -5,6 +5,9 @@ from shiny.types import FileInfo
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
 from app_calculations import numeric_histogram, categorical_count_plot
+from app_calculations import pre_process
+from datetime import date
+from pathlib import Path
 
 settings = {
 
@@ -66,12 +69,16 @@ app_ui = ui.page_fluid(
                     ui.input_selectize("pre_field_select_numeric","Numeric Fields",[],multiple=True),
                     ui.input_selectize("pre_field_select_categorical","Categorical Fields",[],multiple=True),
                     ui.input_selectize("pre_field_select_text","Text Fields",[],multiple=True),
+                    ui.input_action_button("pre_process_start","Process Data"),
+                    ui.download_button("download_pre_process","Download Dataset")
 
 
 
                     
                 ),
-                ui.panel_main()
+                ui.panel_main(
+                    ui.output_ui("processed_data")
+                )
             )
             
             
@@ -193,8 +200,24 @@ def server(input, output, session):
 
 
     ## EDA Page server
+    @output
+    @render.ui
+    @reactive.event(input.pre_process_start,ignore_none=True)
+    def processed_data():
+        df = global_data.get("df")
+        if df is not None:
+            ui.notification_show("Pre-Processing selected columns...",type="message")
+            text_cols = input.pre_field_select_text.get()
+            temp_data = pre_process(df,text_cols=text_cols)
+            output_data = temp_data.output_pre_process()
+            output_show = output_data.head(10)
 
-
+            return ui.HTML(output_show.to_html(classes=settings["table_layout"]))
+    
+    @session.download()
+    def download_pre_process():
+        return global_data.get("df").to_csv("test.csv")
+            
   
 app = App(app_ui, server)
 
